@@ -75,57 +75,23 @@ impl<'a> Keywords<'a> {
     }
 
     pub fn excluded_background(&'a self) -> Vec<&'a str> {
-        [
-            self.scenario,
-            self.scenario_outline,
-            self.given,
-            self.when,
-            self.then,
-            self.and,
-            self.but,
-        ]
-        .concat()
+        [self.scenario, self.scenario_outline].concat()
     }
 
     pub fn excluded_scenario(&'a self) -> Vec<&'a str> {
-        [
-            self.scenario,
-            self.scenario_outline,
-            self.given,
-            self.when,
-            self.then,
-            self.and,
-            self.but,
-        ]
-        .concat()
+        [self.scenario, self.scenario_outline, self.examples].concat()
     }
 
     pub fn excluded_scenario_outline(&'a self) -> Vec<&'a str> {
-        [
-            self.scenario,
-            self.scenario_outline,
-            self.given,
-            self.when,
-            self.then,
-            self.and,
-            self.but,
-        ]
-        .concat()
+        [self.scenario, self.scenario_outline, self.examples].concat()
     }
 
     pub fn excluded_examples(&'a self) -> Vec<&'a str> {
-        let mut r = [
-            self.scenario,
-            self.scenario_outline,
-            self.given,
-            self.when,
-            self.then,
-            self.and,
-            self.but,
-        ]
-        .concat();
-        r.push("|");
-        r
+        [self.scenario, self.scenario_outline, self.examples].concat()
+    }
+
+    pub fn steps(&'a self) -> Vec<&'a str> {
+        [self.given, self.when, self.then, self.and, self.but].concat()
     }
 }
 

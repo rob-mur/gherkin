@@ -174,7 +174,12 @@ rule keyword1(list: &[&str]) -> &'input str
         {list.iter().map(|x| x.chars().count()).max().unwrap()}
     >) {?
         // println!("Input: {}", &input);
-        if let Some(v) = list.iter().find(|x| input.starts_with(**x)) {
+        // The longest keyword wins, so `Regla` does not shadow `Regla de negocio`.
+        if let Some(v) = list
+            .iter()
+            .filter(|x| input.starts_with(**x))
+            .max_by_key(|x| x.chars().count())
+        {
             env.set_keyword((*v).to_string());
             // println!("Found: {}", &v);
             Err("success")
@@ -351,7 +356,7 @@ pub(crate) rule steps() -> Vec<Step>
 rule background() -> Background
     = comment()* _ pa:position!()
       k:keyword((env.keywords().background)) ":" _ n:not_nl()? nl_eof()
-      d:description((&env.keywords().excluded_background()))?
+      d:description((&env.keywords().excluded_background()), (&env.keywords().steps()))?
       s:steps()?
       pb:position!()
     {
@@ -370,16 +375,29 @@ rule any_directive() -> &'static str
         k
     }
 
-rule description_line(excluded: &[&str]) -> &'input str
+// Line ending a description: one starting with any of the `keywords` followed
+// by `:`, or with any of the `prefixes`.
+rule description_end(keywords: &[&str], prefixes: &[&str])
+    = comment()* l:$(not_nl()) {?
+        if keywords.iter().any(|k| l.strip_prefix(k).is_some_and(|r| r.starts_with(':')))
+            || prefixes.iter().any(|p| l.starts_with(p))
+        {
+            Ok(())
+        } else {
+            Err("description line")
+        }
+    }
+
+rule description_line(keywords: &[&str], prefixes: &[&str]) -> &'input str
     = _
-      !"@" !keyword((excluded))
+      !"@" !description_end(keywords, prefixes)
       _ n:not_nl() nl_eof()
     {
         n
     }
 
-rule description(excluded: &[&str]) -> Option<String>
-    = d:(description_line(excluded) ** _) __ {
+rule description(keywords: &[&str], prefixes: &[&str]) -> Option<String>
+    = d:(description_line(keywords, prefixes) ** _) __ {
         let d = d.join("\n");
         if d.trim() == "" {
             None
@@ -395,7 +413,7 @@ rule examples() -> Examples
       _
       pa:position!()
       k:keyword((env.keywords().examples)) ":" _ n:not_nl()? nl_eof()
-      d:description((&env.keywords().excluded_examples()))?
+      d:description((&env.keywords().excluded_examples()), (&["|"]))?
       tb:table()?
       pb:position!()
     {
@@ -417,7 +435,7 @@ rule scenario() -> Scenario
       _
       pa:position!()
       k:keyword((env.keywords().scenario)) ":" _ n:not_nl()? _ nl_eof()
-      d:description((&env.keywords().excluded_scenario()))?
+      d:description((&env.keywords().excluded_scenario()), (&env.keywords().steps()))?
       s:steps()?
       e:examples()*
       pb:position!()
@@ -439,7 +457,7 @@ rule scenario() -> Scenario
       _
       pa:position!()
       k:keyword((env.keywords().scenario_outline)) ":" _ n:not_nl()? _ nl_eof()
-      d:description((&env.keywords().excluded_scenario_outline()))?
+      d:description((&env.keywords().excluded_scenario_outline()), (&env.keywords().steps()))?
       s:steps()?
       e:examples()*
       pb:position!()
@@ -509,7 +527,7 @@ rule rule_() -> Rule
       _
       pa:position!()
       k:keyword((env.keywords().rule)) ":" _ n:not_nl()? _ nl_eof()
-      d:description((&env.keywords().excluded_rule()))?
+      d:description((&env.keywords().excluded_rule()), (&[]))?
       b:background()? nl()*
       s:scenarios()? nl()*
     //   e:examples()?
@@ -539,7 +557,7 @@ pub(crate) rule feature() -> Feature
       t:tags()
       pa:position!()
       k:keyword((env.keywords().feature)) ":" _ n:not_nl()? _ nl_eof()
-      d:description((&env.keywords().excluded_feature()))?
+      d:description((&env.keywords().excluded_feature()), (&[]))?
       b:background()? nl()*
       s:scenarios() nl()*
       r:rules() pb:position!()
@@ -827,6 +845,108 @@ Feature: First step with Besides
         println!("{:#?}", feature);
         assert_eq!(feature.scenarios.len(), 0);
         assert!(feature.description.is_none());
+    }
+
+    #[test]
+    fn non_child_lines_under_feature_are_description() {
+        for (input, description) in [
+            ("Feature: f\n  Examples:\n", "Examples:"),
+            ("Feature: f\n  Examples: x\n", "Examples: x"),
+            ("Feature: f\n  Scenarios:\n", "Scenarios:"),
+            ("Feature: f\n  Examples:\n    | a |\n", "Examples:\n| a |"),
+            (
+                "Feature: f\n  some text\n  Examples:\n",
+                "some text\nExamples:",
+            ),
+            ("Feature: f\n  Scenario Outline x\n", "Scenario Outline x"),
+            ("Feature: f\nFeature: g\n", "Feature: g"),
+            ("Feature: f\n  Given a start\n", "Given a start"),
+            (
+                "# language: fr\nFonctionnalité: f\n  Exemples:\n",
+                "Exemples:",
+            ),
+        ] {
+            let env = GherkinEnv::default();
+            let feature = gherkin_parser::feature(input, &env)
+                .unwrap_or_else(|e| panic!("{:?} was not parsed: {}", input, e));
+            assert_eq!(feature.description.as_deref(), Some(description));
+            assert!(feature.background.is_none());
+            assert_eq!(feature.scenarios.len(), 0);
+            assert_eq!(feature.rules.len(), 0);
+        }
+    }
+
+    #[test]
+    fn child_lines_under_feature_are_children() {
+        for input in [
+            "Feature: f\n  Background:\n",
+            "Feature: f\n  Scenario: s\n",
+            "Feature: f\n  Example: s\n",
+            "Feature: f\n  Scenario Outline: s\n",
+            "Feature: f\n  Rule: r\n",
+            "# language: fr\nFonctionnalité: f\n  Exemple: s\n",
+        ] {
+            let env = GherkinEnv::default();
+            let feature = gherkin_parser::feature(input, &env)
+                .unwrap_or_else(|e| panic!("{:?} was not parsed: {}", input, e));
+            assert!(feature.description.is_none());
+            assert_eq!(
+                usize::from(feature.background.is_some())
+                    + feature.scenarios.len()
+                    + feature.rules.len(),
+                1,
+                "{:?}",
+                input,
+            );
+        }
+    }
+
+    #[test]
+    fn examples_under_rule_and_background_are_description() {
+        let env = GherkinEnv::default();
+        let feature =
+            gherkin_parser::feature("Feature: f\n  Rule: r\n    Examples:\n", &env).unwrap();
+        assert_eq!(feature.rules[0].description.as_deref(), Some("Examples:"));
+
+        let env = GherkinEnv::default();
+        let feature =
+            gherkin_parser::feature("Feature: f\n  Background:\n    Examples:\n", &env).unwrap();
+        let background = feature.background.unwrap();
+        assert_eq!(background.description.as_deref(), Some("Examples:"));
+    }
+
+    #[test]
+    fn examples_after_scenario_description() {
+        let env = GherkinEnv::default();
+        let input = "Feature: f\n  Scenario: s\n    some text\n  Examples:\n";
+        let feature = gherkin_parser::feature(input, &env).unwrap();
+        let scenario = &feature.scenarios[0];
+        assert_eq!(scenario.description.as_deref(), Some("some text"));
+        assert_eq!(scenario.examples.len(), 1);
+    }
+
+    #[test]
+    fn examples_after_scenario_in_other_languages() {
+        for input in [
+            "# language: it\nFunzionalità: f\n  Scenario: s\n    Esempi:\n      | a |\n",
+            "# language: jv\nFitur: f\n  Skenario: s\n    Contone:\n      | a |\n",
+        ] {
+            let env = GherkinEnv::default();
+            let feature = gherkin_parser::feature(input, &env)
+                .unwrap_or_else(|e| panic!("{:?} was not parsed: {}", input, e));
+            let scenario = &feature.scenarios[0];
+            assert!(scenario.description.is_none(), "{:?}", input);
+            assert_eq!(scenario.examples.len(), 1, "{:?}", input);
+        }
+    }
+
+    #[test]
+    fn longest_keyword_wins() {
+        let env = GherkinEnv::default();
+        let input = "# language: es\nCaracterística: f\n  Regla de negocio: r\n";
+        let feature = gherkin_parser::feature(input, &env).unwrap();
+        assert_eq!(feature.rules[0].keyword, "Regla de negocio");
+        assert_eq!(feature.rules[0].name, "r");
     }
 
     #[test]

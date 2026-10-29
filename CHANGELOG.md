@@ -6,6 +6,18 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 
 
+## main
+
+### Fixed
+
+- Parsing error on a `Feature`, `Rule` or `Background` description line starting with an `Examples` keyword (`Examples:`, `Scenarios:`), now read as description to align with upstream.
+- Parsing error on an `Examples` description line starting with a `Step` keyword.
+- `Examples` following a `Scenario` parsed as its description in some languages (e.g. `Esempi` in `it`).
+- Keyword shadowed by a shorter keyword prefixing it (e.g. `Regla de negocio` by `Regla` in `es`).
+
+
+
+
 ## [0.16.0] · 2026-04-23
 [0.16.0]: https://github.com/cucumber-rs/gherkin/tree/v0.16.0
 
