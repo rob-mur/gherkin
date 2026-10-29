@@ -273,10 +273,15 @@ pub(crate) rule table() -> Table
         }
     }
 
+rule step_argument() -> (Option<String>, Option<Table>)
+    = d:docstring() { (Some(d), None) }
+    / t:table() { (None, Some(t)) }
+
 pub(crate) rule step() -> Step
     = comment()* pa:position!() k:keyword((env.keywords().given)) _ n:not_nl() pb:position!() _ nl_eof() _
-      d:docstring()? t:table()?
+      a:step_argument()?
     {
+        let (d, t) = a.unwrap_or_default();
         env.set_last_step(StepType::Given);
         Step::builder().ty(StepType::Given)
             .keyword(k.to_string())
@@ -288,8 +293,9 @@ pub(crate) rule step() -> Step
             .build()
     }
     / pa:position!() k:keyword((env.keywords().when)) _ n:not_nl() pb:position!() _ nl_eof() _
-      d:docstring()? t:table()?
+      a:step_argument()?
     {
+        let (d, t) = a.unwrap_or_default();
         env.set_last_step(StepType::When);
         Step::builder().ty(StepType::When)
             .keyword(k.to_string())
@@ -301,8 +307,9 @@ pub(crate) rule step() -> Step
             .build()
     }
     / pa:position!() k:keyword((env.keywords().then)) _ n:not_nl() pb:position!() _ nl_eof() _
-      d:docstring()? t:table()?
+      a:step_argument()?
     {
+        let (d, t) = a.unwrap_or_default();
         env.set_last_step(StepType::Then);
         Step::builder().ty(StepType::Then)
             .keyword(k.to_string())
@@ -314,8 +321,9 @@ pub(crate) rule step() -> Step
             .build()
     }
     / pa:position!() k:keyword((env.keywords().and)) _ n:not_nl() pb:position!() _ nl_eof() _
-      d:docstring()? t:table()?
+      a:step_argument()?
     {
+        let (d, t) = a.unwrap_or_default();
         let ty = env.last_step().unwrap_or(StepType::Given);
         env.set_last_step(ty);
         Step::builder().ty(ty)
@@ -328,8 +336,9 @@ pub(crate) rule step() -> Step
             .build()
     }
     / pa:position!() k:keyword((env.keywords().but)) _ n:not_nl() pb:position!() _ nl_eof() _
-      d:docstring()? t:table()?
+      a:step_argument()?
     {
+        let (d, t) = a.unwrap_or_default();
         let ty = env.last_step().unwrap_or(StepType::Given);
         env.set_last_step(ty);
         Step::builder().ty(ty)
@@ -877,6 +886,36 @@ Feature: Foo
     Examples:
       | value |
       | \     |
+"#;
+        assert!(gherkin_parser::feature(input, &env).is_err());
+    }
+
+    #[test]
+    fn reject_step_with_docstring_and_table() {
+        let env = GherkinEnv::default();
+        let input = r#"
+Feature: Foo
+  Scenario: Bar
+    Given a
+      """
+      x
+      """
+      | a |
+"#;
+        assert!(gherkin_parser::feature(input, &env).is_err());
+    }
+
+    #[test]
+    fn reject_step_with_table_and_docstring() {
+        let env = GherkinEnv::default();
+        let input = r#"
+Feature: Foo
+  Scenario: Bar
+    Given a
+      | a |
+      """
+      x
+      """
 "#;
         assert!(gherkin_parser::feature(input, &env).is_err());
     }
