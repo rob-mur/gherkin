@@ -16,6 +16,7 @@ pub struct GherkinEnv {
     keywords: RefCell<Keywords<'static>>,
     pub(crate) last_error: RefCell<Option<EnvError>>,
     pub(crate) fatal_error: RefCell<Option<EnvError>>,
+    fatal_error_offset: RefCell<Option<usize>>,
     last_step: RefCell<Option<StepType>>,
     last_keyword: RefCell<Option<String>>,
     line_offsets: RefCell<Vec<usize>>,
@@ -70,6 +71,10 @@ impl GherkinEnv {
         }
 
         *self.fatal_error.borrow_mut() = Some(error);
+    }
+
+    fn set_fatal_error_offset(&self, offset: usize) {
+        self.fatal_error_offset.borrow_mut().get_or_insert(offset);
     }
 
     fn set_last_error(&self, error: EnvError) {
@@ -127,6 +132,29 @@ impl GherkinEnv {
         LineCol { line, col }
     }
 
+    /// Returns the position to report for a failure to parse the `input`,
+    /// given the `offset` the parser failed at.
+    ///
+    /// Like the reference Gherkin parser, points to the first non-blank
+    /// character of the line causing the failure (blank lines never cause
+    /// one), or to column 0 of the line past the end of the `input`, if it
+    /// ended unexpectedly. A fatal error points to where it was found instead.
+    pub(crate) fn error_position(&self, input: &str, offset: usize) -> LineCol {
+        let offset = self.fatal_error_offset.borrow().unwrap_or(offset);
+        let start = input[..offset].rfind('\n').map_or(0, |n| n + 1);
+        let mut line = input[..start].matches('\n').count() + 1;
+        for text in input[start..].lines() {
+            let trimmed = text.trim_start();
+            if !trimmed.is_empty() {
+                let indent = &text[..text.len() - trimmed.len()];
+                let col = indent.chars().count() + 1;
+                return LineCol { line, col };
+            }
+            line += 1;
+        }
+        LineCol { line, col: 0 }
+    }
+
     fn escaped(&self) -> bool {
         *self.was_escaped.borrow()
     }
@@ -142,6 +170,7 @@ impl Default for GherkinEnv {
             keywords: RefCell::new(Keywords::default()),
             last_error: RefCell::new(None),
             fatal_error: RefCell::new(None),
+            fatal_error_offset: RefCell::new(None),
             last_step: RefCell::new(None),
             last_keyword: RefCell::new(None),
             line_offsets: RefCell::new(vec![0]),
@@ -169,10 +198,7 @@ rule comment() = quiet!{comment_no_nl() nl_eof()}
 rule not_nl() -> &'input str = n:$((!nl0()[_])+) { n }
 
 rule keyword1(list: &[&str]) -> &'input str
-    = input:$([_]*<
-        {list.iter().map(|x| x.chars().count()).min().unwrap()},
-        {list.iter().map(|x| x.chars().count()).max().unwrap()}
-    >) {?
+    = input:$((!nl0() [_])+) {?
         // println!("Input: {}", &input);
         if let Some(v) = list.iter().find(|x| input.starts_with(**x)) {
             env.set_keyword((*v).to_string());
@@ -201,8 +227,9 @@ pub(crate) rule keyword<'a>(list: &[&'a str]) -> &'a str
     }
 
 rule language_directive() -> ()
-    = ([' ' | '\t'] / nl_no_comment())* "#" _ "language" _ ":" _ l:$(not_nl()+) _ nl() {?
-        env.set_language(l)
+    = ([' ' | '\t'] / nl_no_comment())* p:position!()
+      "#" _ "language" _ ":" _ l:$(not_nl()+) _ nl() {?
+        env.set_language(l).inspect_err(|_| env.set_fatal_error_offset(p))
     }
 
 rule docstring() -> String
@@ -249,20 +276,22 @@ pub(crate) rule table_row() -> Vec<String>
             .collect()
     }
 
-pub(crate) rule table0() -> Vec<Vec<String>>
-    = _ d:(table_row() ++ _) {
+pub(crate) rule table0() -> Vec<(usize, Vec<String>)>
+    = _ d:((p:position!() r:table_row() { (p, r) }) ++ _) {
         if d.is_empty() {
             d
         } else {
-            let len = d[0].len();
-            d.into_iter().map(|mut x| { x.truncate(len); x }).collect()
+            let len = d[0].1.len();
+            d.into_iter().map(|(p, mut x)| { x.truncate(len); (p, x) }).collect()
         }
     }
 
 pub(crate) rule table() -> Table
     = pa:position!() t:table0() pb:position!() {?
-        if !t.is_empty() && t.iter().skip(1).any(|x| x.len() != t[0].len()) {
+        let (offsets, t): (Vec<_>, Vec<_>) = t.into_iter().unzip();
+        if let Some(n) = t.iter().position(|x| x.len() != t[0].len()) {
             env.set_fatal_error(EnvError::InconsistentCellCount(t));
+            env.set_fatal_error_offset(offsets[n]);
             Err("inconsistent table row sizes")
         } else {
             Ok(Table::builder()
@@ -941,6 +970,102 @@ Feature: Foo
                 assert!(res.is_err(), "{}: {:?}", filename, res.unwrap());
             }
         }
+    }
+
+    /// Parses the `input` expecting it to fail, and returns the position and
+    /// the error `Feature::parse_path()` reports for it.
+    fn parse_error(input: &str) -> (LineCol, Option<EnvError>) {
+        let env = GherkinEnv::default();
+        let e = gherkin_parser::feature(input, &env).unwrap_err();
+        let position = env.error_position(input, e.location.offset);
+        let error = env.fatal_error.take().or_else(|| env.last_error.take());
+        (position, error)
+    }
+
+    #[test]
+    fn error_at_inconsistent_table_row() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a table
+      | a | b |
+      | c |
+"#;
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_unknown_line_after_step() {
+        // Reference: `(4:5): expected: #EOF, ..., got 'loose words'`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a
+    loose words
+"#;
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 5 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose words"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_second_feature() {
+        // Reference: `(5:1): expected: #EOF, ..., got 'Feature: g'`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a
+
+Feature: g
+  Scenario: t
+    Given b
+"#;
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 1 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "Feature: g"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_end_of_unclosed_docstring() {
+        // Reference: `(6:0): unexpected end of file, expected: ...`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a
+      """
+      x
+"#;
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 6, col: 0 });
+    }
+
+    #[test]
+    fn error_at_step_after_tag() {
+        // Reference: `(5:5): expected: #TagLine, ..., got 'When b'`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a
+    @t
+    When b
+"#;
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 5 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "When b"),
+            "{:?}",
+            error,
+        );
     }
 
     // TODO: Actually generate `.ndjson` file from the AST to fully assert

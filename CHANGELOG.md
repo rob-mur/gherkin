@@ -6,6 +6,20 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 
 
+## [0.16.1] · 2026-??-?? (unreleased)
+[0.16.1]: https://github.com/cucumber-rs/gherkin/tree/v0.16.1
+
+[Diff](https://github.com/cucumber-rs/gherkin/compare/v0.16.0...v0.16.1)
+
+### Fixed
+
+- `ParseError` position pointing past the line causing the error, instead of to its first non-blank character (as the reference Gherkin parser does), and `EnvError::UnknownKeyword` holding only the first few characters of that line. ([todo])
+
+[todo]: /../../commit/todo
+
+
+
+
 ## [0.16.0] · 2026-04-23
 [0.16.0]: https://github.com/cucumber-rs/gherkin/tree/v0.16.0
 
