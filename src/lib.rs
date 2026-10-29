@@ -217,10 +217,7 @@ impl Feature {
                     .take()
                     .or_else(|| env.last_error.borrow_mut().take()),
                 source: ParseError {
-                    position: LineCol {
-                        line: e.location.line,
-                        col: e.location.column,
-                    },
+                    position: env.error_position(&s, e.location.offset),
                     expected: e.expected.tokens().collect(),
                 },
             })?;
@@ -239,10 +236,7 @@ impl Feature {
             false => Cow::Owned(format!("{}\n", input.as_ref())),
         };
         parser::gherkin_parser::feature(&input, &env).map_err(|e| ParseError {
-            position: LineCol {
-                line: e.location.line,
-                col: e.location.column,
-            },
+            position: env.error_position(&input, e.location.offset),
             expected: e.expected.tokens().collect(),
         })
     }
