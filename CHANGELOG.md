@@ -25,6 +25,7 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 - Incorrect rejection of table cells with a backslash not starting an [escape sequence](https://cucumber.io/docs/gherkin/reference#table-cell-escaping) (`\n`, `\|` or `\\`), instead of keeping such a backslash as is. ([#60], [#59])
 - Parsing error on a `Feature`, `Rule` or `Background` description line starting with an `Examples` keyword (`Examples:`, `Scenarios:`), now read as description to align with upstream. ([#65])
 - Parsing error on an `Examples` description line starting with a `Step` keyword. ([#65])
+- `ParseError` position pointing past the line causing the error, instead of to its first non-blank character (as the reference Gherkin parser does), and `EnvError::UnknownKeyword` holding only the first few characters of that line. ([todo])
 
 [#7]: https://github.com/rob-mur/gherkin/pull/7
 [#59]: https://github.com/cucumber-rs/gherkin/issues/59
@@ -33,6 +34,7 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 [#63]: https://github.com/cucumber-rs/gherkin/pull/63
 [#64]: https://github.com/cucumber-rs/gherkin/pull/64
 [#65]: https://github.com/cucumber-rs/gherkin/pull/65
+[todo]: /../../commit/todo
 
 
 
