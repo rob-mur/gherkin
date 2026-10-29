@@ -6,6 +6,15 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 
 
+## main
+
+### Fixed
+
+- Step with both a doc string and a data table being accepted, while a step may have only one argument.
+
+
+
+
 ## [0.16.0] · 2026-04-23
 [0.16.0]: https://github.com/cucumber-rs/gherkin/tree/v0.16.0
 
