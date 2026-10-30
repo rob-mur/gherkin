@@ -10,9 +10,10 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 ### Fixed
 
-- Rejected table cells with a backslash not starting an [escape sequence](https://cucumber.io/docs/gherkin/reference#table-cell-escaping) (`\n`, `\|` or `\\`), instead of keeping such a backslash as is. ([todo])
+- Rejected table cells with a backslash not starting an [escape sequence](https://cucumber.io/docs/gherkin/reference#table-cell-escaping) (`\n`, `\|` or `\\`), instead of keeping such a backslash as is. ([#60], [#59])
 
-[todo]: /../../commit/todo
+[#59]: https://github.com/cucumber-rs/gherkin/issues/59
+[#60]: https://github.com/cucumber-rs/gherkin/pull/60
 
 
 
