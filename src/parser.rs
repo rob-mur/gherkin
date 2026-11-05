@@ -565,7 +565,7 @@ pub(crate) rule feature() -> Feature
 // A document holding only blank lines and comments has no feature. A
 // `# language:` line is a directive rather than a comment, so a feature has to
 // follow it.
-rule empty_line() = !(_ "#" _ "language" _ ":") _ comment_no_nl()?
+rule empty_line() = !(_ "#" _ "language" _ ":" _ not_nl()) _ comment_no_nl()?
 rule empty_document() = quiet!{empty_line() ** nl0() eof()}
 
 pub(crate) rule document() -> Option<Feature>
@@ -900,6 +900,10 @@ Feature: Foo
             "# only a comment\n",
             "# only a comment",
             "# a\n\n  # b\r\n",
+            "# languages are fun\n",
+            "# language is not a directive\n",
+            "# language:\n",
+            "# language:   \n",
         ] {
             let env = GherkinEnv::default();
             assert_eq!(
@@ -917,6 +921,9 @@ Feature: Foo
             "# language: fr\n",
             "# a\n# language: fr\n",
             "# language: xx-invalid\n",
+            "  # language: fr\n",
+            "\t# language: fr\n",
+            "# language : fr\n",
             "@tag\n",
         ] {
             let env = GherkinEnv::default();
