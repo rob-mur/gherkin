@@ -8,9 +8,9 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 ## main
 
-### Fixed
+### BC Breaks
 
-- Silently truncated table rows having more cells than the first row, instead of rejecting them with `EnvError::InconsistentCellCount` as rows having fewer cells are. ([todo])
+- Rejected table rows having more cells than the first row with `EnvError::InconsistentCellCount`, as rows having fewer cells are, instead of silently truncating them. ([todo])
 
 [todo]: /../../commit/todo
 
