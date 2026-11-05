@@ -1051,6 +1051,60 @@ Feature: g
     }
 
     #[test]
+    fn error_at_inconsistent_table_row_in_the_middle() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = "Feature: f\n  Scenario: s\n    Given a table\n      | a | b |\n      | c |\n      | e | f |\n      | g | h |\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn first_fatal_error_wins_over_later_one() {
+        // Reference: `(1:1): Language not supported: xx`
+        let input = "# language: xx\nFeature: f\n  Scenario: s\n    Given a table\n      | a | b |\n      | c |\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 1, col: 1 });
+        assert!(
+            matches!(&error, Some(EnvError::UnsupportedLanguage(s)) if s == "xx"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_tab_indented_line() {
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\t\tloose\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 3 });
+    }
+
+    #[test]
+    fn error_at_non_ascii_indented_line() {
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{a0}\u{a0}loose\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 3 });
+    }
+
+    #[test]
+    fn error_at_crlf_line() {
+        let input = "Feature: f\r\n  Scenario: s\r\n    Given a\r\n    loose words\r\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 5 });
+    }
+
+    #[test]
+    fn error_at_end_after_trailing_blank_lines() {
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x\n\n\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 8, col: 0 });
+    }
+
+    #[test]
     fn error_at_step_after_tag() {
         // Reference: `(5:5): expected: #TagLine, ..., got 'When b'`
         let input = r#"Feature: f
