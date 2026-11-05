@@ -823,7 +823,8 @@ Scenario: Meow
     #[test]
     fn docstring_span_with_double_quotes() {
         let env = GherkinEnv::default();
-        let input = "Feature: f\n  Scenario: s\n    Given a body\n      \"\"\"\n      x\n      \"\"\"\n";
+        let input =
+            "Feature: f\n  Scenario: s\n    Given a body\n      \"\"\"\n      x\n      \"\"\"\n";
         let feature = gherkin_parser::feature(input, &env).unwrap();
         let start = input.find("\"\"\"").unwrap();
         let end = input.rfind("\"\"\"").unwrap() + 3;
