@@ -921,6 +921,29 @@ Feature: Foo
     }
 
     #[test]
+    fn reject_step_with_docstring_and_table_for_all_keywords() {
+        for keyword in ["Given", "When", "Then", "And", "But"] {
+            for delim in ["\"\"\"", "```"] {
+                for between in ["", "      # comment\n", "\n"] {
+                    for (head, ctx) in [
+                        ("  Background:\n    Given z\n", "bg"),
+                        ("  Scenario: Bar\n    Given z\n", "sc"),
+                    ] {
+                        let env = GherkinEnv::default();
+                        let input = format!(
+                            "Feature: Foo\n{head}    {keyword} a\n      {delim}\n      x\n      {delim}\n{between}      | a |\n"
+                        );
+                        assert!(
+                            gherkin_parser::feature(&input, &env).is_err(),
+                            "{ctx} {keyword} {delim} {between:?} was accepted",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn fixture_good() {
         // We cannot handle missing features very well yet.
         let skip = ["empty.feature", "incomplete_feature_3.feature"];
