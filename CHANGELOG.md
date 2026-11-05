@@ -12,6 +12,7 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 - Made `Step::docstring` a new `Docstring` type with `content`, `media_type`, `delimiter`, `span` and `position` fields, instead of a `String`.
 - Fixed parsing of docstrings to align with upstream: the media type is no longer a part of the content, the content is dedented relative to the opening delimiter, has no leading and trailing newlines, and has its escaped delimiters unescaped.
+- A docstring written on one line (`"""x"""`) now has `x` as its media type and an empty content, as upstream does not accept this form.
 
 
 

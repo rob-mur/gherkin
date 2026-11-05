@@ -811,6 +811,36 @@ Scenario: Meow
     }
 
     #[test]
+    fn docstring_trims_media_type() {
+        let env = GherkinEnv::default();
+        let input = "Feature: f\n  Scenario: s\n    Given a body\n      \"\"\" json \r\n      x\n      \"\"\"\n";
+        let feature = gherkin_parser::feature(input, &env).unwrap();
+        let docstring = feature.scenarios[0].steps[0].docstring().unwrap();
+        assert_eq!(docstring.media_type.as_deref(), Some("json"));
+        assert_eq!(docstring.content, "x");
+    }
+
+    #[test]
+    fn docstring_span_with_double_quotes() {
+        let env = GherkinEnv::default();
+        let input = "Feature: f\n  Scenario: s\n    Given a body\n      \"\"\"\n      x\n      \"\"\"\n";
+        let feature = gherkin_parser::feature(input, &env).unwrap();
+        let start = input.find("\"\"\"").unwrap();
+        let end = input.rfind("\"\"\"").unwrap() + 3;
+        let docstring = feature.scenarios[0].steps[0].docstring().unwrap();
+        assert_eq!(docstring.span, Span { start, end });
+    }
+
+    #[test]
+    fn docstring_with_non_ascii_leading_whitespace() {
+        let env = GherkinEnv::default();
+        let input = "Feature: f\n  Scenario: s\n    Given a body\n      \"\"\"\n  \u{a0} x\n      \u{a0}y\n      \"\"\"\n";
+        let feature = gherkin_parser::feature(input, &env).unwrap();
+        let docstring = feature.scenarios[0].steps[0].docstring().unwrap();
+        assert_eq!(docstring.content, "x\n\u{a0}y");
+    }
+
+    #[test]
     fn feature_name_and_scenario() {
         let env = GherkinEnv::default();
         let input = r#"Feature: Basic functionality
