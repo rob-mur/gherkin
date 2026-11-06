@@ -66,6 +66,7 @@ fn whitespace_in_tags() {
 
 #[test]
 fn error_positions_match_reference() {
+    let mut checked = 0;
     for entry in fs::read_dir("./tests/fixtures/data/bad").unwrap() {
         let path = entry.unwrap().path();
         if path.extension().is_none_or(|ext| ext != "feature") {
@@ -97,5 +98,10 @@ fn error_positions_match_reference() {
             .unwrap_err()
             .to_string();
         assert!(error.starts_with(&expected), "{}: {error}", path.display());
+
+        checked += 1;
     }
+
+    // Guard against silently checking nothing.
+    assert!(checked >= 7, "checked only {} files", checked);
 }
