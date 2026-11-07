@@ -56,12 +56,16 @@ fn single_parser_error() {
 
 #[test]
 fn unexpected_eof() {
-    let _ = load_feature("./tests/fixtures/data/bad/unexpected_eof.feature").unwrap_err();
+    let error = load_feature("./tests/fixtures/data/bad/unexpected_eof.feature").unwrap_err();
+    // The line the parser tried last, as the error is at the end of the file.
+    assert_eq!(unknown_keyword(error), "@tag");
 }
 
 #[test]
 fn whitespace_in_tags() {
-    let _ = load_feature("./tests/fixtures/data/bad/whitespace_in_tags.feature").unwrap_err();
+    let error = load_feature("./tests/fixtures/data/bad/whitespace_in_tags.feature").unwrap_err();
+    // The rest of the line after the first tag, which ends at the whitespace.
+    assert_eq!(unknown_keyword(error), "tag containing whitespace");
 }
 
 #[test]

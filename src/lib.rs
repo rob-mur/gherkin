@@ -215,7 +215,8 @@ impl Feature {
                 source: e,
             })?;
 
-        if !s.ends_with('\n') {
+        let appended_newline = !s.ends_with('\n');
+        if appended_newline {
             // Add a new line at the end, because our parser is bad and we should feel bad.
             s.push('\n');
         }
@@ -229,7 +230,7 @@ impl Feature {
                     .take()
                     .or_else(|| env.last_error.borrow_mut().take()),
                 source: ParseError {
-                    position: env.error_position(&s, e.location.offset),
+                    position: env.error_position(&s, appended_newline, e.location.offset),
                     expected: e.expected.tokens().collect(),
                 },
             })?;
@@ -253,13 +254,14 @@ impl Feature {
     pub fn parse<S: AsRef<str>>(input: S, env: GherkinEnv) -> Result<Option<Feature>, ParseError> {
         use std::borrow::Cow;
 
-        let input: Cow<'_, str> = match input.as_ref().ends_with('\n') {
-            true => Cow::Borrowed(input.as_ref()),
+        let appended_newline = !input.as_ref().ends_with('\n');
+        let input: Cow<'_, str> = match appended_newline {
+            false => Cow::Borrowed(input.as_ref()),
             // Add a new line at the end, because our parser is bad and we should feel bad.
-            false => Cow::Owned(format!("{}\n", input.as_ref())),
+            true => Cow::Owned(format!("{}\n", input.as_ref())),
         };
         parser::gherkin_parser::document(&input, &env).map_err(|e| ParseError {
-            position: env.error_position(&input, e.location.offset),
+            position: env.error_position(&input, appended_newline, e.location.offset),
             expected: e.expected.tokens().collect(),
         })
     }

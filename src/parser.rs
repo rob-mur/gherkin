@@ -143,27 +143,48 @@ impl GherkinEnv {
     /// Returns the position to report for a failure to parse the `input`,
     /// given the `offset` the parser failed at.
     ///
+    /// The `input` is what the parser read. It ends with a `\n`, and
+    /// `appended_newline` tells whether the caller added that `\n` itself.
+    ///
     /// Like the reference Gherkin parser, points to the first non-blank
     /// character of the line causing the failure (blank lines never cause
     /// one), or to column 0 of the line past the end of the `input`, if it
     /// ended unexpectedly. A fatal error points to where it was found instead.
     ///
-    /// Like the reference too, any leading whitespace counts as indentation,
-    /// and a column is counted in characters, starting from 1.
-    pub(crate) fn error_position(&self, input: &str, offset: usize) -> LineCol {
+    /// Like the reference too, a blank last line does not count when the
+    /// source has no final newline, any leading whitespace counts as
+    /// indentation (see [`is_js_whitespace()`]), and a column is counted in
+    /// characters, starting from 1.
+    pub(crate) fn error_position(
+        &self,
+        input: &str,
+        appended_newline: bool,
+        offset: usize,
+    ) -> LineCol {
         let offset = self.fatal_error_offset.borrow().unwrap_or(offset);
-        let start = input[..offset].rfind('\n').map_or(0, |n| n + 1);
-        let mut line = input[..start].matches('\n').count() + 1;
-        for text in input[start..].lines() {
-            let trimmed = text.trim_start();
+        let first = input[..offset].matches('\n').count();
+
+        let body = input.strip_suffix('\n').unwrap_or(input);
+        let mut lines = body
+            .split('\n')
+            .map(|l| l.strip_suffix('\r').unwrap_or(l))
+            .collect::<Vec<_>>();
+        if appended_newline && lines.last().is_some_and(|l| is_blank(l)) {
+            lines.pop();
+        }
+
+        for (n, text) in lines.iter().enumerate().skip(first) {
+            let trimmed = text.trim_start_matches(is_js_whitespace);
             if !trimmed.is_empty() {
                 let indent = &text[..text.len() - trimmed.len()];
                 let col = indent.chars().count() + 1;
-                return LineCol { line, col };
+                return LineCol { line: n + 1, col };
             }
-            line += 1;
         }
-        LineCol { line, col: 0 }
+        LineCol {
+            line: lines.len() + 1,
+            col: 0,
+        }
     }
 
     fn escaped(&self) -> bool {
@@ -188,6 +209,20 @@ impl Default for GherkinEnv {
             was_escaped: RefCell::new(false),
         }
     }
+}
+
+/// Checks whether the `c` is whitespace for the reference Gherkin parser.
+///
+/// That one is written in JavaScript, where `\s` matches U+FEFF (the byte
+/// order mark) but not U+0085, the other way round from [`char::is_whitespace()`].
+fn is_js_whitespace(c: char) -> bool {
+    c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}')
+}
+
+/// Checks whether the `line` holds nothing but whitespace, as the reference
+/// Gherkin parser sees it.
+fn is_blank(line: &str) -> bool {
+    line.trim_matches(is_js_whitespace).is_empty()
 }
 
 /// Builds a [`Docstring`] from the `raw` text found between its `delimiter`s.
@@ -272,7 +307,9 @@ rule keyword1(list: &[&str]) -> &'input str
         } else {
             // println!("Unfound: {}", &input);
             env.clear_keyword();
-            env.set_last_error(EnvError::UnknownKeyword(input.trim_end().into()));
+            env.set_last_error(EnvError::UnknownKeyword(
+                input.trim_matches(is_js_whitespace).into(),
+            ));
             Err("unknown keyword")
         }
     }
@@ -1788,15 +1825,16 @@ Feature: Foo
     /// Also checks the position against the one `Feature::parse()` reports.
     fn parse_error(input: &str) -> (LineCol, Option<EnvError>) {
         // Like `Feature::parse()` and `Feature::parse_path()` do.
-        let terminated = if input.ends_with('\n') {
-            input.to_owned()
-        } else {
+        let appended_newline = !input.ends_with('\n');
+        let terminated = if appended_newline {
             format!("{input}\n")
+        } else {
+            input.to_owned()
         };
 
         let env = GherkinEnv::default();
         let e = gherkin_parser::feature(&terminated, &env).unwrap_err();
-        let position = env.error_position(&terminated, e.location.offset);
+        let position = env.error_position(&terminated, appended_newline, e.location.offset);
         let error = env.fatal_error.take().or_else(|| env.last_error.take());
 
         let parsed = Feature::parse(input, GherkinEnv::default()).unwrap_err();
@@ -2052,6 +2090,126 @@ Feature: g
         assert_eq!(position, LineCol { line: 4, col: 5 });
         assert!(
             matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose words"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_end_after_whitespace_only_last_line() {
+        // Reference: `(6:0): unexpected end of file, expected: ...`, as it
+        // drops a last line holding only whitespace.
+        for last in ["    ", "\t", "\u{a0}", "\u{feff}"] {
+            let input =
+                format!("Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x\n{last}",);
+            let (position, _) = parse_error(&input);
+            assert_eq!(position, LineCol { line: 6, col: 0 }, "{last:?}");
+        }
+
+        // Reference: `(2:0): unexpected end of file, expected: ...`
+        let (position, _) = parse_error("@t\n   ");
+        assert_eq!(position, LineCol { line: 2, col: 0 });
+    }
+
+    #[test]
+    fn error_at_end_after_whitespace_only_last_line_with_newline() {
+        // Reference: `(7:0): unexpected end of file, expected: ...`, as it
+        // only drops the empty line after the last newline.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x\n    \n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 7, col: 0 });
+    }
+
+    #[test]
+    fn error_at_end_after_last_line_of_next_line_character() {
+        // Reference: `(7:0): unexpected end of file, expected: ...`, as U+0085
+        // is not whitespace for it.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x\n\u{85}";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 7, col: 0 });
+    }
+
+    #[test]
+    fn error_indented_with_byte_order_mark() {
+        // Reference: `(4:2): expected: #EOF, ..., got 'loose'`, as U+FEFF is
+        // whitespace for it.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{feff}loose\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 2 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose"),
+            "{:?}",
+            error,
+        );
+
+        // Reference: `(1:2): Language not supported: xx`
+        let input = "\u{feff}# language: xx\nFeature: f\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 1, col: 2 });
+    }
+
+    #[test]
+    fn error_not_indented_with_next_line_character() {
+        // Reference: `(4:1): expected: #EOF, ..., got '\u{85}loose'`, as U+0085
+        // is not whitespace for it.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{85}loose\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 1 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "\u{85}loose"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_after_line_blank_only_after_trimming() {
+        // The grammar does not see these lines as blank, but the reference
+        // does, so it moves on to the next line.
+        // Reference: `(5:5): expected: #EOF, ..., got 'loose'`
+        for blank in ["\u{a0}\u{a0}", "\u{feff}", "\u{b}"] {
+            let input = format!("Feature: f\n  Scenario: s\n    Given a\n{blank}\n    loose\n");
+            let (position, _) = parse_error(&input);
+            assert_eq!(position, LineCol { line: 5, col: 5 }, "{blank:?}");
+        }
+
+        // Reference: `(4:1): expected: #EOF, ..., got '\u{85}'`, as U+0085
+        // is not whitespace for it.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{85}\n    loose\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 1 });
+    }
+
+    #[test]
+    fn error_at_first_inconsistent_table_row() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      | a | b |\n      | c |\n      | d | e | f |\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_text_has_no_surrounding_whitespace() {
+        // Reference: `(4:2): expected: #EOF, ..., got 'loose'`
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{a0}loose\u{3000}\u{a0}\t\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 2 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose"),
+            "{:?}",
+            error,
+        );
+
+        // Reference: `(4:1): expected: #EOF, ..., got 'loose\u{85}'`
+        let input = "Feature: f\n  Scenario: s\n    Given a\nloose\u{85}\n";
+        let (_, error) = parse_error(input);
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose\u{85}"),
             "{:?}",
             error,
         );
