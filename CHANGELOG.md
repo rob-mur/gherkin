@@ -10,16 +10,18 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 ### BC Breaks
 
+- Made `Feature::parse()` and `Feature::parse_path()` return `Result<Option<Feature>, _>`, being `Ok(None)` for a document without a `Feature`. ([#63])
 - Rejected table rows having more cells than the first row with `EnvError::InconsistentCellCount`, as rows having fewer cells already were, instead of silently truncating them. ([#7])
-
-[#7]: https://github.com/rob-mur/gherkin/pull/7
 
 ### Fixed
 
+- Valid document without a `Feature` (empty or holding only comments) being rejected. ([#63])
 - Incorrect rejection of table cells with a backslash not starting an [escape sequence](https://cucumber.io/docs/gherkin/reference#table-cell-escaping) (`\n`, `\|` or `\\`), instead of keeping such a backslash as is. ([#60], [#59])
 
+[#7]: https://github.com/rob-mur/gherkin/pull/7
 [#59]: https://github.com/cucumber-rs/gherkin/issues/59
 [#60]: https://github.com/cucumber-rs/gherkin/pull/60
+[#63]: https://github.com/cucumber-rs/gherkin/pull/63
 
 
 
