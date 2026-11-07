@@ -8,6 +8,12 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 ## main
 
+### BC Breaks
+
+- Rejected table rows having more cells than the first row with `EnvError::InconsistentCellCount`, as rows having fewer cells already were, instead of silently truncating them. ([#7])
+
+[#7]: https://github.com/rob-mur/gherkin/pull/7
+
 ### Fixed
 
 - Incorrect rejection of table cells with a backslash not starting an [escape sequence](https://cucumber.io/docs/gherkin/reference#table-cell-escaping) (`\n`, `\|` or `\\`), instead of keeping such a backslash as is. ([#60], [#59])
