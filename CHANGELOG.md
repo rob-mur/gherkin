@@ -12,11 +12,17 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 - Made `Step::docstring` a new `Docstring` type with `content`, `media_type`, `delimiter`, `span` and `position` fields, instead of a `String`. This also changes the `serde` output and the `juniper` (GraphQL) type of `Step::docstring` from a string to an object. ([#62])
 - Rejected docstrings having the closing delimiter on the same line as the opening one (`"""x"""`), as upstream does, instead of reading them as content. The text after the opening delimiter is always its media type. ([#62])
+- Rejected table rows having more cells than the first row with `EnvError::InconsistentCellCount`, as rows having fewer cells already were, instead of silently truncating them. ([#7])
+
+[#7]: https://github.com/rob-mur/gherkin/pull/7
 
 ### Fixed
 
 - Parsing of docstrings to align with upstream: the media type is no longer a part of the content, the content is dedented relative to the opening delimiter, has no leading and trailing newlines, and has its escaped delimiters unescaped. ([#62])
+- Incorrect rejection of table cells with a backslash not starting an [escape sequence](https://cucumber.io/docs/gherkin/reference#table-cell-escaping) (`\n`, `\|` or `\\`), instead of keeping such a backslash as is. ([#60], [#59])
 
+[#59]: https://github.com/cucumber-rs/gherkin/issues/59
+[#60]: https://github.com/cucumber-rs/gherkin/pull/60
 [#62]: https://github.com/cucumber-rs/gherkin/pull/62
 
 
