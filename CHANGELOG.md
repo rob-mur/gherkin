@@ -11,8 +11,17 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 ### BC Breaks
 
 - Rejected a step with both a doc string and a data table, as a step may have only one argument. ([#64])
+- Rejected table rows having more cells than the first row with `EnvError::InconsistentCellCount`, as rows having fewer cells already were, instead of silently truncating them. ([#7])
 
+[#7]: https://github.com/rob-mur/gherkin/pull/7
 [#64]: https://github.com/cucumber-rs/gherkin/pull/64
+
+### Fixed
+
+- Incorrect rejection of table cells with a backslash not starting an [escape sequence](https://cucumber.io/docs/gherkin/reference#table-cell-escaping) (`\n`, `\|` or `\\`), instead of keeping such a backslash as is. ([#60], [#59])
+
+[#59]: https://github.com/cucumber-rs/gherkin/issues/59
+[#60]: https://github.com/cucumber-rs/gherkin/pull/60
 
 
 
