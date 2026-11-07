@@ -10,6 +10,7 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 
 ### BC Breaks
 
+- Rejected a step with both a doc string and a data table, as a step may have only one argument. ([#64])
 - Made `Step::docstring` a new `Docstring` type with `content`, `media_type`, `delimiter`, `span` and `position` fields, instead of a `String`. This also changes the `serde` output and the `juniper` (GraphQL) type of `Step::docstring` from a string to an object. ([#62])
 - Rejected docstrings having the closing delimiter on the same line as the opening one (`"""x"""`), as upstream does, instead of reading them as content. The text after the opening delimiter is always its media type. ([#62])
 - Made `Feature::parse()` and `Feature::parse_path()` return `Result<Option<Feature>, _>`, being `Ok(None)` for a document without a `Feature`. ([#63])
@@ -30,6 +31,7 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 [#60]: https://github.com/cucumber-rs/gherkin/pull/60
 [#62]: https://github.com/cucumber-rs/gherkin/pull/62
 [#63]: https://github.com/cucumber-rs/gherkin/pull/63
+[#64]: https://github.com/cucumber-rs/gherkin/pull/64
 [#65]: https://github.com/cucumber-rs/gherkin/pull/65
 
 
