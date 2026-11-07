@@ -195,8 +195,20 @@ pub struct Feature {
 
 #[cfg(feature = "parser")]
 impl Feature {
+    /// Parses the `.feature` file at the given `path`.
+    ///
+    /// Returns [`None`] if the file holds no `Feature`, i.e. it is empty or
+    /// contains only blank lines and comments. A `# language:` header without
+    /// a `Feature` after it is an error.
+    ///
+    /// # Errors
+    ///
+    /// If the file cannot be read or is not a valid Gherkin document.
     #[inline]
-    pub fn parse_path<P: AsRef<Path>>(path: P, env: GherkinEnv) -> Result<Feature, ParseFileError> {
+    pub fn parse_path<P: AsRef<Path>>(
+        path: P,
+        env: GherkinEnv,
+    ) -> Result<Option<Feature>, ParseFileError> {
         let mut s =
             std::fs::read_to_string(path.as_ref()).map_err(|e| ParseFileError::Reading {
                 path: path.as_ref().to_path_buf(),
@@ -208,8 +220,8 @@ impl Feature {
             s.push('\n');
         }
 
-        let mut feature =
-            parser::gherkin_parser::feature(&s, &env).map_err(|e| ParseFileError::Parsing {
+        let feature =
+            parser::gherkin_parser::document(&s, &env).map_err(|e| ParseFileError::Parsing {
                 path: path.as_ref().to_path_buf(),
                 error: env
                     .fatal_error
@@ -225,12 +237,23 @@ impl Feature {
                 },
             })?;
 
-        feature.path = Some(path.as_ref().to_path_buf());
-        Ok(feature)
+        Ok(feature.map(|mut feature| {
+            feature.path = Some(path.as_ref().to_path_buf());
+            feature
+        }))
     }
 
+    /// Parses the given `.feature` file contents.
+    ///
+    /// Returns [`None`] if the `input` holds no `Feature`, i.e. it is empty or
+    /// contains only blank lines and comments. A `# language:` header without
+    /// a `Feature` after it is an error.
+    ///
+    /// # Errors
+    ///
+    /// If the `input` is not a valid Gherkin document.
     #[inline]
-    pub fn parse<S: AsRef<str>>(input: S, env: GherkinEnv) -> Result<Feature, ParseError> {
+    pub fn parse<S: AsRef<str>>(input: S, env: GherkinEnv) -> Result<Option<Feature>, ParseError> {
         use std::borrow::Cow;
 
         let input: Cow<'_, str> = match input.as_ref().ends_with('\n') {
@@ -238,7 +261,7 @@ impl Feature {
             // Add a new line at the end, because our parser is bad and we should feel bad.
             false => Cow::Owned(format!("{}\n", input.as_ref())),
         };
-        parser::gherkin_parser::feature(&input, &env).map_err(|e| ParseError {
+        parser::gherkin_parser::document(&input, &env).map_err(|e| ParseError {
             position: LineCol {
                 line: e.location.line,
                 col: e.location.column,
@@ -332,7 +355,7 @@ pub struct Step {
     pub value: String,
     /// A docstring, if provided.
     #[cfg_attr(feature = "parser", builder(default))]
-    pub docstring: Option<String>,
+    pub docstring: Option<Docstring>,
     /// A data table, if provided.
     #[cfg_attr(feature = "parser", builder(default))]
     pub table: Option<Table>,
@@ -345,7 +368,8 @@ pub struct Step {
 }
 
 impl Step {
-    pub fn docstring(&self) -> Option<&String> {
+    /// Returns the docstring of this step, if it has one.
+    pub fn docstring(&self) -> Option<&Docstring> {
         self.docstring.as_ref()
     }
 
@@ -368,6 +392,29 @@ pub enum StepType {
     Given,
     When,
     Then,
+}
+
+/// A docstring.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "parser", derive(TypedBuilder))]
+#[cfg_attr(feature = "juniper", derive(juniper::GraphQLObject))]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+pub struct Docstring {
+    /// The content of the docstring, without its delimiters and with the
+    /// indentation of the opening delimiter removed from each line.
+    pub content: String,
+    /// The media type written after the opening delimiter, if provided.
+    #[cfg_attr(feature = "parser", builder(default))]
+    pub media_type: Option<String>,
+    /// The delimiter used in the original source, either `"""` or ```` ``` ````.
+    pub delimiter: String,
+    /// The `(start, end)` byte offset of the docstring in the .feature file,
+    /// from the start of the opening delimiter to the end of the closing one.
+    #[cfg_attr(feature = "parser", builder(default))]
+    pub span: Span,
+    /// The `(line, col)` position of the opening delimiter in the .feature file.
+    #[cfg_attr(feature = "parser", builder(default))]
+    pub position: LineCol,
 }
 
 /// A data table
