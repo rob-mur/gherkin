@@ -17,6 +17,7 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 - Rejected table rows having more cells than the first row with `EnvError::InconsistentCellCount`, as rows having fewer cells already were, instead of silently truncating them. ([#7])
 - `Examples` following a `Scenario` or `Scenario Outline` parsed as its description in some languages (e.g. `Esempi` in `it`), now parsed as `Examples` to align with upstream. Affects 45 languages. ([#65])
 - Keyword shadowed by a shorter keyword of the same type prefixing it (e.g. `Regla de negocio` by `Regla` in `es`), now the longest one wins. Also changes the `keyword` and `value` of steps in existing files (e.g. `A tiež y` in `sk` and `Sipoze ke x` in `ht`). ([#65])
+- `ParseError` position now pointing to the first non-blank character of the line causing the error (as the reference Gherkin parser does), instead of where the parser gave up (often the start of the next line). `EnvError::UnknownKeyword` now holds the rest of the line from where a keyword was expected, without surrounding whitespace, instead of its first four characters. ([#6])
 
 ### Fixed
 
@@ -26,6 +27,7 @@ All user visible changes to `gherkin` crate will be documented in this file. Thi
 - Parsing error on a `Feature`, `Rule` or `Background` description line starting with an `Examples` keyword (`Examples:`, `Scenarios:`), now read as description to align with upstream. ([#65])
 - Parsing error on an `Examples` description line starting with a `Step` keyword. ([#65])
 
+[#6]: https://github.com/rob-mur/gherkin/pull/6
 [#7]: https://github.com/rob-mur/gherkin/pull/7
 [#59]: https://github.com/cucumber-rs/gherkin/issues/59
 [#60]: https://github.com/cucumber-rs/gherkin/pull/60

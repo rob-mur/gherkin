@@ -18,6 +18,7 @@ pub struct GherkinEnv {
     keywords: RefCell<Keywords<'static>>,
     pub(crate) last_error: RefCell<Option<EnvError>>,
     pub(crate) fatal_error: RefCell<Option<EnvError>>,
+    fatal_error_offset: RefCell<Option<usize>>,
     last_step: RefCell<Option<StepType>>,
     last_keyword: RefCell<Option<String>>,
     line_offsets: RefCell<Vec<usize>>,
@@ -48,8 +49,14 @@ impl GherkinEnv {
     }
 
     pub fn set_language(&self, language: &str) -> Result<(), &'static str> {
+        self.set_language_at(language, None)
+    }
+
+    /// Same as [`GherkinEnv::set_language()`], but also records the `offset`
+    /// of the language directive, to report an unsupported language at.
+    fn set_language_at(&self, language: &str, offset: Option<usize>) -> Result<(), &'static str> {
         let keywords = Keywords::get(language).ok_or_else(|| {
-            self.set_fatal_error(EnvError::UnsupportedLanguage(language.into()));
+            self.set_fatal_error(EnvError::UnsupportedLanguage(language.into()), offset);
             "Unsupported language"
         })?;
 
@@ -66,12 +73,16 @@ impl GherkinEnv {
         Ok(())
     }
 
-    fn set_fatal_error(&self, error: EnvError) {
+    /// Records the first fatal `error` along with the `offset` of the input
+    /// it was found at, if known, which is reported as the error position
+    /// instead of the one the parser failed at.
+    fn set_fatal_error(&self, error: EnvError, offset: Option<usize>) {
         if self.fatal_error.borrow().is_some() {
             return;
         }
 
         *self.fatal_error.borrow_mut() = Some(error);
+        *self.fatal_error_offset.borrow_mut() = offset;
     }
 
     fn set_last_error(&self, error: EnvError) {
@@ -129,6 +140,53 @@ impl GherkinEnv {
         LineCol { line, col }
     }
 
+    /// Returns the position to report for a failure to parse the `input`,
+    /// given the `offset` the parser failed at.
+    ///
+    /// The `input` is what the parser read. It ends with a `\n`, and
+    /// `appended_newline` tells whether the caller added that `\n` itself.
+    ///
+    /// Like the reference Gherkin parser, points to the first non-blank
+    /// character of the line causing the failure (blank lines never cause
+    /// one), or to column 0 of the line past the end of the `input`, if it
+    /// ended unexpectedly. A fatal error points to where it was found instead.
+    ///
+    /// Like the reference too, a blank last line does not count when the
+    /// source has no final newline, any leading whitespace counts as
+    /// indentation (see [`is_js_whitespace()`]), and a column is counted in
+    /// characters, starting from 1.
+    pub(crate) fn error_position(
+        &self,
+        input: &str,
+        appended_newline: bool,
+        offset: usize,
+    ) -> LineCol {
+        let offset = self.fatal_error_offset.borrow().unwrap_or(offset);
+        let first = input[..offset].matches('\n').count();
+
+        let body = input.strip_suffix('\n').unwrap_or(input);
+        let mut lines = body
+            .split('\n')
+            .map(|l| l.strip_suffix('\r').unwrap_or(l))
+            .collect::<Vec<_>>();
+        if appended_newline && lines.last().is_some_and(|l| is_blank(l)) {
+            lines.pop();
+        }
+
+        for (n, text) in lines.iter().enumerate().skip(first) {
+            let trimmed = text.trim_start_matches(is_js_whitespace);
+            if !trimmed.is_empty() {
+                let indent = &text[..text.len() - trimmed.len()];
+                let col = indent.chars().count() + 1;
+                return LineCol { line: n + 1, col };
+            }
+        }
+        LineCol {
+            line: lines.len() + 1,
+            col: 0,
+        }
+    }
+
     fn escaped(&self) -> bool {
         *self.was_escaped.borrow()
     }
@@ -144,12 +202,27 @@ impl Default for GherkinEnv {
             keywords: RefCell::new(Keywords::default()),
             last_error: RefCell::new(None),
             fatal_error: RefCell::new(None),
+            fatal_error_offset: RefCell::new(None),
             last_step: RefCell::new(None),
             last_keyword: RefCell::new(None),
             line_offsets: RefCell::new(vec![0]),
             was_escaped: RefCell::new(false),
         }
     }
+}
+
+/// Checks whether the `c` is whitespace for the reference Gherkin parser.
+///
+/// That one is written in JavaScript, where `\s` matches U+FEFF (the byte
+/// order mark) but not U+0085, the other way round from [`char::is_whitespace()`].
+fn is_js_whitespace(c: char) -> bool {
+    c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}')
+}
+
+/// Checks whether the `line` holds nothing but whitespace, as the reference
+/// Gherkin parser sees it.
+fn is_blank(line: &str) -> bool {
+    line.trim_matches(is_js_whitespace).is_empty()
 }
 
 /// Builds a [`Docstring`] from the `raw` text found between its `delimiter`s.
@@ -220,10 +293,7 @@ rule comment() = quiet!{comment_no_nl() nl_eof()}
 rule not_nl() -> &'input str = n:$((!nl0()[_])+) { n }
 
 rule keyword1(list: &[&str]) -> &'input str
-    = input:$([_]*<
-        {list.iter().map(|x| x.chars().count()).min().unwrap()},
-        {list.iter().map(|x| x.chars().count()).max().unwrap()}
-    >) {?
+    = input:$((!nl0() [_])+) {?
         // println!("Input: {}", &input);
         // The longest keyword wins, so `Regla` does not shadow `Regla de negocio`.
         if let Some(v) = list
@@ -237,7 +307,9 @@ rule keyword1(list: &[&str]) -> &'input str
         } else {
             // println!("Unfound: {}", &input);
             env.clear_keyword();
-            env.set_last_error(EnvError::UnknownKeyword(input.into()));
+            env.set_last_error(EnvError::UnknownKeyword(
+                input.trim_matches(is_js_whitespace).into(),
+            ));
             Err("unknown keyword")
         }
     }
@@ -257,8 +329,9 @@ pub(crate) rule keyword<'a>(list: &[&'a str]) -> &'a str
     }
 
 rule language_directive() -> ()
-    = ([' ' | '\t'] / nl_no_comment())* "#" _ "language" _ ":" _ l:$(not_nl()+) _ nl() {?
-        env.set_language(l)
+    = ([' ' | '\t'] / nl_no_comment())* p:position!()
+      "#" _ "language" _ ":" _ l:$(not_nl()+) _ nl() {?
+        env.set_language_at(l, Some(p))
     }
 
 rule docstring() -> Docstring
@@ -305,13 +378,14 @@ pub(crate) rule table_row() -> Vec<String>
             .collect()
     }
 
-pub(crate) rule table0() -> Vec<Vec<String>>
-    = _ d:(table_row() ++ _) { d }
+pub(crate) rule table0() -> Vec<(usize, Vec<String>)>
+    = _ d:((p:position!() r:table_row() { (p, r) }) ++ _) { d }
 
 pub(crate) rule table() -> Table
     = pa:position!() t:table0() pb:position!() {?
-        if !t.is_empty() && t.iter().skip(1).any(|x| x.len() != t[0].len()) {
-            env.set_fatal_error(EnvError::InconsistentCellCount(t));
+        let (offsets, t): (Vec<_>, Vec<_>) = t.into_iter().unzip();
+        if let Some(n) = t.iter().position(|x| x.len() != t[0].len()) {
+            env.set_fatal_error(EnvError::InconsistentCellCount(t), Some(offsets[n]));
             Err("inconsistent table row sizes")
         } else {
             Ok(Table::builder()
@@ -1743,6 +1817,402 @@ Feature: Foo
                 assert!(res.is_err(), "{}: {:?}", filename, res.unwrap());
             }
         }
+    }
+
+    /// Parses the `input` expecting it to fail, and returns the position and
+    /// the error `Feature::parse_path()` reports for it.
+    ///
+    /// Also checks the position against the one `Feature::parse()` reports.
+    fn parse_error(input: &str) -> (LineCol, Option<EnvError>) {
+        // Like `Feature::parse()` and `Feature::parse_path()` do.
+        let appended_newline = !input.ends_with('\n');
+        let terminated = if appended_newline {
+            format!("{input}\n")
+        } else {
+            input.to_owned()
+        };
+
+        let env = GherkinEnv::default();
+        let e = gherkin_parser::feature(&terminated, &env).unwrap_err();
+        let position = env.error_position(&terminated, appended_newline, e.location.offset);
+        let error = env.fatal_error.take().or_else(|| env.last_error.take());
+
+        let parsed = Feature::parse(input, GherkinEnv::default()).unwrap_err();
+        assert_eq!(parsed.position, position);
+
+        (position, error)
+    }
+
+    #[test]
+    fn error_at_inconsistent_table_row() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a table
+      | a | b |
+      | c |
+"#;
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_unknown_line_after_step() {
+        // Reference: `(4:5): expected: #EOF, ..., got 'loose words'`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a
+    loose words
+"#;
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 5 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose words"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_second_feature() {
+        // Reference: `(5:1): expected: #EOF, ..., got 'Feature: g'`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a
+
+Feature: g
+  Scenario: t
+    Given b
+"#;
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 1 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "Feature: g"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_end_of_unclosed_docstring() {
+        // Reference: `(6:0): unexpected end of file, expected: ...`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a
+      """
+      x
+"#;
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 6, col: 0 });
+    }
+
+    #[test]
+    fn error_at_table_row_longer_than_first() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = "Feature: f\n  Scenario: s\n    Given a table\n      | a | b |\n      | c | d | e |\n      | f | g |\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_inconsistent_table_row_in_the_middle() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = "Feature: f\n  Scenario: s\n    Given a table\n      | a | b |\n      | c |\n      | e | f |\n      | g | h |\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn first_fatal_error_wins_over_later_one() {
+        // Reference: `(1:1): Language not supported: xx`
+        let input = "# language: xx\nFeature: f\n  Scenario: s\n    Given a table\n      | a | b |\n      | c |\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 1, col: 1 });
+        assert!(
+            matches!(&error, Some(EnvError::UnsupportedLanguage(s)) if s == "xx"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_tab_indented_line() {
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\t\tloose\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 3 });
+    }
+
+    #[test]
+    fn error_at_non_ascii_indented_line() {
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{a0}\u{a0}loose\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 3 });
+    }
+
+    #[test]
+    fn error_at_crlf_line() {
+        let input = "Feature: f\r\n  Scenario: s\r\n    Given a\r\n    loose words\r\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 5 });
+    }
+
+    #[test]
+    fn error_at_end_after_trailing_blank_lines() {
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x\n\n\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 8, col: 0 });
+    }
+
+    #[test]
+    fn error_at_step_after_tag() {
+        // Reference: `(5:5): expected: #TagLine, ..., got 'When b'`
+        let input = r#"Feature: f
+  Scenario: s
+    Given a
+    @t
+    When b
+"#;
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 5 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "When b"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_unsupported_language_after_blank_lines() {
+        // Reference: `(3:3): Language not supported: xx`
+        let input = "\n\n  # language: xx\nFeature: f\n  Scenario: s\n    Given a\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 3, col: 3 });
+        assert!(
+            matches!(&error, Some(EnvError::UnsupportedLanguage(s)) if s == "xx"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_inconsistent_examples_row() {
+        // Reference: `(7:7): inconsistent cell count within the table`
+        let input = "Feature: f\n  Scenario Outline: s\n    Given <a>\n    Examples:\n      | a | b |\n      | 1 | 2 |\n      | 3 |\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 7, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_inconsistent_background_row() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = "Feature: f\n  Background:\n    Given a table\n      | a | b |\n      | c |\n  Scenario: s\n    Given b\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_unknown_line_in_rule() {
+        // Reference: `(5:7): expected: #EOF, ..., got 'loose words'`
+        let input = "Feature: f\n  Rule: r\n    Scenario: s\n      Given a\n      loose words\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose words"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_not_moved_by_comments_and_blank_lines_after_it() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = "Feature: f\n  Scenario: s\n    Given a table\n      | a | b |\n      | c |\n\n      # comment\n\n    Given b\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+
+        // Reference: `(4:5): expected: #EOF, ..., got 'loose words'`
+        let input = "Feature: f\n  Scenario: s\n    Given a\n    loose words\n    # comment\n\n    Given b\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 5 });
+    }
+
+    #[test]
+    fn error_text_has_no_trailing_whitespace() {
+        // Reference: `(4:5): expected: #EOF, ..., got 'loose words'`
+        let input = "Feature: f\n  Scenario: s\n    Given a\n    loose words \t \n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 5 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose words"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_end_of_input_without_trailing_newline() {
+        // Reference: `(6:0): unexpected end of file, expected: ...`
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 6, col: 0 });
+    }
+
+    #[test]
+    fn error_after_non_ascii_lines() {
+        // Reference: `(4:5): expected: #EOF, ..., got 'loose words'`
+        let input = "Feature: 日本語\n  Scenario: シナリオ\n    Given あ\n    loose words\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 5 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose words"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_at_end_after_whitespace_only_last_line() {
+        // Reference: `(6:0): unexpected end of file, expected: ...`, as it
+        // drops a last line holding only whitespace.
+        for last in ["    ", "\t", "\u{a0}", "\u{feff}"] {
+            let input =
+                format!("Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x\n{last}",);
+            let (position, _) = parse_error(&input);
+            assert_eq!(position, LineCol { line: 6, col: 0 }, "{last:?}");
+        }
+
+        // Reference: `(2:0): unexpected end of file, expected: ...`
+        let (position, _) = parse_error("@t\n   ");
+        assert_eq!(position, LineCol { line: 2, col: 0 });
+    }
+
+    #[test]
+    fn error_at_end_after_whitespace_only_last_line_with_newline() {
+        // Reference: `(7:0): unexpected end of file, expected: ...`, as it
+        // only drops the empty line after the last newline.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x\n    \n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 7, col: 0 });
+    }
+
+    #[test]
+    fn error_at_end_after_last_line_of_next_line_character() {
+        // Reference: `(7:0): unexpected end of file, expected: ...`, as U+0085
+        // is not whitespace for it.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      \"\"\"\n      x\n\u{85}";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 7, col: 0 });
+    }
+
+    #[test]
+    fn error_indented_with_byte_order_mark() {
+        // Reference: `(4:2): expected: #EOF, ..., got 'loose'`, as U+FEFF is
+        // whitespace for it.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{feff}loose\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 2 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose"),
+            "{:?}",
+            error,
+        );
+
+        // Reference: `(1:2): Language not supported: xx`
+        let input = "\u{feff}# language: xx\nFeature: f\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 1, col: 2 });
+    }
+
+    #[test]
+    fn error_not_indented_with_next_line_character() {
+        // Reference: `(4:1): expected: #EOF, ..., got '\u{85}loose'`, as U+0085
+        // is not whitespace for it.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{85}loose\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 1 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "\u{85}loose"),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_after_line_blank_only_after_trimming() {
+        // The grammar does not see these lines as blank, but the reference
+        // does, so it moves on to the next line.
+        // Reference: `(5:5): expected: #EOF, ..., got 'loose'`
+        for blank in ["\u{a0}\u{a0}", "\u{feff}", "\u{b}"] {
+            let input = format!("Feature: f\n  Scenario: s\n    Given a\n{blank}\n    loose\n");
+            let (position, _) = parse_error(&input);
+            assert_eq!(position, LineCol { line: 5, col: 5 }, "{blank:?}");
+        }
+
+        // Reference: `(4:1): expected: #EOF, ..., got '\u{85}'`, as U+0085
+        // is not whitespace for it.
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{85}\n    loose\n";
+        let (position, _) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 1 });
+    }
+
+    #[test]
+    fn error_at_first_inconsistent_table_row() {
+        // Reference: `(5:7): inconsistent cell count within the table`
+        let input = "Feature: f\n  Scenario: s\n    Given a\n      | a | b |\n      | c |\n      | d | e | f |\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 5, col: 7 });
+        assert!(
+            matches!(&error, Some(EnvError::InconsistentCellCount(_))),
+            "{:?}",
+            error,
+        );
+    }
+
+    #[test]
+    fn error_text_has_no_surrounding_whitespace() {
+        // Reference: `(4:2): expected: #EOF, ..., got 'loose'`
+        let input = "Feature: f\n  Scenario: s\n    Given a\n\u{a0}loose\u{3000}\u{a0}\t\n";
+        let (position, error) = parse_error(input);
+        assert_eq!(position, LineCol { line: 4, col: 2 });
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose"),
+            "{:?}",
+            error,
+        );
+
+        // Reference: `(4:1): expected: #EOF, ..., got 'loose\u{85}'`
+        let input = "Feature: f\n  Scenario: s\n    Given a\nloose\u{85}\n";
+        let (_, error) = parse_error(input);
+        assert!(
+            matches!(&error, Some(EnvError::UnknownKeyword(s)) if s == "loose\u{85}"),
+            "{:?}",
+            error,
+        );
     }
 
     // TODO: Actually generate `.ndjson` file from the AST to fully assert
